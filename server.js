@@ -27,6 +27,7 @@ app.use('/api/savedDiseases', require('./routes/saved_diseases'));
 app.use('/api/savedWeeks', require('./routes/savedWeeks'));
 app.use('/api/savedBabyNames', require('./routes/saved_baby_names'));
 app.use('/api/notifications', require('./routes/notifications'));
+app.use('/api/ai-diagnosis', require('./routes/ai-diagnosis'));
 
 module.exports = app
 
