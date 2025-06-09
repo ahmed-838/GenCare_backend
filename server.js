@@ -8,7 +8,10 @@ const cookieParser = require('cookie-parser');
 const authMiddleware = require('./middleware/authMiddleware');
 
 const app = express();
-connectDB();
+// Only connect to DB if not in test environment
+if (process.env.NODE_ENV !== 'test') {
+  connectDB();
+}
 
 app.use(cors({
   origin: '*',
@@ -29,11 +32,14 @@ app.use('/api/savedBabyNames', require('./routes/saved_baby_names'));
 app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api/ai-diagnosis', require('./routes/ai-diagnosis'));
 
-module.exports = app
+module.exports = app;
 
-// const port = process.env.PORT;
-// app.listen(port, () => {
-//     console.log(`Server is running on port ${port}`);
-// });
+// Only start the server if this file is run directly
+if (require.main === module) {
+  const port = process.env.PORT || 5000;
+  app.listen(port, () => {
+    console.log(`Server is running on port ${port}`);
+  });
+}
 
 
