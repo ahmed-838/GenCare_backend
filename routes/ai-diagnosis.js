@@ -1,36 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const axios = require('axios');
-const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const authMiddleware = require('../middleware/authMiddleware');
-
-// Configure multer for file uploads
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    const uploadPath = path.join(__dirname, '../uploads');
-    if (!fs.existsSync(uploadPath)) {
-      fs.mkdirSync(uploadPath, { recursive: true });
-    }
-    cb(null, uploadPath);
-  },
-  filename: function (req, file, cb) {
-    cb(null, Date.now() + '-' + file.originalname);
-  }
-});
-
-const upload = multer({ 
-  storage: storage,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) {
-      cb(null, true);
-    } else {
-      cb(new Error('Only image files are allowed'));
-    }
-  }
-});
 
 // Config for model inference service
 const MODEL_API_URL = 'http://16.171.139.253/';
@@ -64,55 +37,84 @@ router.get('/health', async (req, res) => {
 });
 
 // Process ultrasound image for diagnosis
-router.post('/analyze', upload.single('file'), async (req, res) => {
+router.post('/analyze', express.raw({ type: 'multipart/form-data', limit: '10mb' }), async (req, res) => {
   console.log('استلام طلب تحليل صورة');
+  console.log('Content-Type:', req.headers['content-type']);
   
   try {
-    // التحقق من وجود الصورة
-    if (!req.file) {
-      console.error('لم يتم تحميل أي ملف');
-      return res.status(400).json({ success: false, error: 'No image uploaded' });
-    }
-
-    console.log('تم استلام الملف:', req.file.filename);
-
-    const FormData = require('form-data');
-    const formData = new FormData();
+    // استخدام busboy مباشرة للتعامل مع formdata من React Native
+    const busboy = require('busboy');
+    const bb = busboy({ headers: req.headers });
     
-    // إرفاق الملف للإرسال
-    const fileStream = fs.createReadStream(req.file.path);
-    formData.append('file', fileStream, { filename: req.file.filename });
+    let imageBuffer = null;
+    let fileName = null;
+    let mimeType = null;
     
-    console.log('جاري إرسال الصورة للتحليل...');
+    // عند استلام ملف
+    bb.on('file', (name, file, info) => {
+      console.log('استلام ملف:', name);
+      console.log('معلومات الملف:', info);
+      
+      const chunks = [];
+      file.on('data', (chunk) => {
+        chunks.push(chunk);
+      });
+      
+      file.on('end', () => {
+        imageBuffer = Buffer.concat(chunks);
+        fileName = info.filename;
+        mimeType = info.mimeType;
+        console.log('تم استلام الملف بالكامل. الحجم:', imageBuffer.length, 'بايت');
+      });
+    });
     
-    // إرسال الصورة إلى خدمة التحليل
-    const response = await axios.post(`${MODEL_API_URL}/api/predict`, formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data'
+    // عند اكتمال المعالجة
+    bb.on('finish', async () => {
+      if (!imageBuffer) {
+        console.error('لم يتم استلام أي صورة');
+        return res.status(400).json({ success: false, error: 'No image uploaded' });
+      }
+      
+      try {
+        // إنشاء FormData لإرسال الملف
+        const FormData = require('form-data');
+        const formData = new FormData();
+        
+        // إضافة الصورة إلى FormData
+        formData.append('file', imageBuffer, {
+          filename: fileName || `image_${Date.now()}.jpg`,
+          contentType: mimeType || 'image/jpeg'
+        });
+        
+        console.log('جاري إرسال الصورة للتحليل...');
+        
+        // إرسال الصورة إلى خدمة التحليل
+        const response = await axios.post(`${MODEL_API_URL}/api/predict`, formData, {
+          headers: {
+            'Content-Type': 'multipart/form-data'
+          }
+        });
+        
+        console.log('تم استلام الرد من خدمة التحليل');
+        console.log('نوع الاستجابة:', typeof response.data);
+        
+        // إرسال الرد كما هو للتطبيق
+        return res.status(200).json(response.data);
+      } catch (error) {
+        console.error('خطأ أثناء معالجة الصورة:', error.message);
+        return res.status(500).json({
+          success: false,
+          error: 'Failed to process the image'
+        });
       }
     });
-
-    console.log('تم استلام الرد من خدمة التحليل');
     
-    // حذف الصورة المؤقتة
-    fs.unlink(req.file.path, (err) => {
-      if (err) console.error('خطأ في حذف الملف المؤقت:', err);
-      else console.log('تم حذف الملف المؤقت');
-    });
-
-    // إرسال الرد كما هو للتطبيق
-    return res.status(200).json(response.data);
+    // إرسال البيانات إلى busboy
+    bb.end(req.body);
     
   } catch (error) {
-    console.error('خطأ في معالجة الصورة:', error.message);
-    
-    // حذف الصورة المؤقتة إذا وجدت
-    if (req.file && req.file.path) {
-      fs.unlink(req.file.path, (err) => {
-        if (err) console.error('خطأ في حذف الملف المؤقت:', err);
-      });
-    }
-    
+    console.error('خطأ في معالجة الطلب:', error.message);
+    console.error('تفاصيل الخطأ:', error.stack);
     return res.status(500).json({
       success: false,
       error: 'Failed to process the image'
